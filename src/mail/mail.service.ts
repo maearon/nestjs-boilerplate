@@ -1,169 +1,53 @@
-import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { I18nContext } from 'nestjs-i18n';
-import { MailData } from './interfaces/mail-data.interface';
-
-import { MaybeType } from '../utils/types/maybe.type';
-import { MailerService } from '../mailer/mailer.service';
-import path from 'path';
-import { AllConfigType } from '../config/config.type';
+import { Injectable } from "@nestjs/common"
+import type { ConfigService } from "@nestjs/config"
+import * as nodemailer from "nodemailer"
 
 @Injectable()
 export class MailService {
-  constructor(
-    private readonly mailerService: MailerService,
-    private readonly configService: ConfigService<AllConfigType>,
-  ) {}
+  private transporter: nodemailer.Transporter
 
-  async userSignUp(mailData: MailData<{ hash: string }>): Promise<void> {
-    const i18n = I18nContext.current();
-    let emailConfirmTitle: MaybeType<string>;
-    let text1: MaybeType<string>;
-    let text2: MaybeType<string>;
-    let text3: MaybeType<string>;
-
-    if (i18n) {
-      [emailConfirmTitle, text1, text2, text3] = await Promise.all([
-        i18n.t('common.confirmEmail'),
-        i18n.t('confirm-email.text1'),
-        i18n.t('confirm-email.text2'),
-        i18n.t('confirm-email.text3'),
-      ]);
-    }
-
-    const url = new URL(
-      this.configService.getOrThrow('app.frontendDomain', {
-        infer: true,
-      }) + '/confirm-email',
-    );
-    url.searchParams.set('hash', mailData.data.hash);
-
-    await this.mailerService.sendMail({
-      to: mailData.to,
-      subject: emailConfirmTitle,
-      text: `${url.toString()} ${emailConfirmTitle}`,
-      templatePath: path.join(
-        this.configService.getOrThrow('app.workingDirectory', {
-          infer: true,
-        }),
-        'src',
-        'mail',
-        'mail-templates',
-        'activation.hbs',
-      ),
-      context: {
-        title: emailConfirmTitle,
-        url: url.toString(),
-        actionTitle: emailConfirmTitle,
-        app_name: this.configService.get('app.name', { infer: true }),
-        text1,
-        text2,
-        text3,
+  constructor(private configService: ConfigService) {
+    this.transporter = nodemailer.createTransporter({
+      host: this.configService.get("SMTP_HOST", "localhost"),
+      port: this.configService.get("SMTP_PORT", 587),
+      secure: false,
+      auth: {
+        user: this.configService.get("SMTP_USER"),
+        pass: this.configService.get("SMTP_PASS"),
       },
-    });
+    })
   }
 
-  async forgotPassword(
-    mailData: MailData<{ hash: string; tokenExpires: number }>,
-  ): Promise<void> {
-    const i18n = I18nContext.current();
-    let resetPasswordTitle: MaybeType<string>;
-    let text1: MaybeType<string>;
-    let text2: MaybeType<string>;
-    let text3: MaybeType<string>;
-    let text4: MaybeType<string>;
+  async sendAccountActivation(user: any, token: string) {
+    const activationUrl = `${this.configService.get("APP_URL")}/account_activations/${token}/edit?email=${encodeURIComponent(user.email)}`
 
-    if (i18n) {
-      [resetPasswordTitle, text1, text2, text3, text4] = await Promise.all([
-        i18n.t('common.resetPassword'),
-        i18n.t('reset-password.text1'),
-        i18n.t('reset-password.text2'),
-        i18n.t('reset-password.text3'),
-        i18n.t('reset-password.text4'),
-      ]);
-    }
-
-    const url = new URL(
-      this.configService.getOrThrow('app.frontendDomain', {
-        infer: true,
-      }) + '/password-change',
-    );
-    url.searchParams.set('hash', mailData.data.hash);
-    url.searchParams.set('expires', mailData.data.tokenExpires.toString());
-
-    await this.mailerService.sendMail({
-      to: mailData.to,
-      subject: resetPasswordTitle,
-      text: `${url.toString()} ${resetPasswordTitle}`,
-      templatePath: path.join(
-        this.configService.getOrThrow('app.workingDirectory', {
-          infer: true,
-        }),
-        'src',
-        'mail',
-        'mail-templates',
-        'reset-password.hbs',
-      ),
-      context: {
-        title: resetPasswordTitle,
-        url: url.toString(),
-        actionTitle: resetPasswordTitle,
-        app_name: this.configService.get('app.name', {
-          infer: true,
-        }),
-        text1,
-        text2,
-        text3,
-        text4,
-      },
-    });
+    await this.transporter.sendMail({
+      from: this.configService.get("FROM_EMAIL", "noreply@example.com"),
+      to: user.email,
+      subject: "Account activation",
+      html: `
+        <h1>Sample app</h1>
+        <p>Hi ${user.name},</p>
+        <p>Welcome to the Sample App! Click on the link below to activate your account:</p>
+        <a href="${activationUrl}">Activate</a>
+      `,
+    })
   }
 
-  async confirmNewEmail(mailData: MailData<{ hash: string }>): Promise<void> {
-    const i18n = I18nContext.current();
-    let emailConfirmTitle: MaybeType<string>;
-    let text1: MaybeType<string>;
-    let text2: MaybeType<string>;
-    let text3: MaybeType<string>;
+  async sendPasswordReset(user: any, token: string) {
+    const resetUrl = `${this.configService.get("APP_URL")}/password_resets/${token}/edit?email=${encodeURIComponent(user.email)}`
 
-    if (i18n) {
-      [emailConfirmTitle, text1, text2, text3] = await Promise.all([
-        i18n.t('common.confirmEmail'),
-        i18n.t('confirm-new-email.text1'),
-        i18n.t('confirm-new-email.text2'),
-        i18n.t('confirm-new-email.text3'),
-      ]);
-    }
-
-    const url = new URL(
-      this.configService.getOrThrow('app.frontendDomain', {
-        infer: true,
-      }) + '/confirm-new-email',
-    );
-    url.searchParams.set('hash', mailData.data.hash);
-
-    await this.mailerService.sendMail({
-      to: mailData.to,
-      subject: emailConfirmTitle,
-      text: `${url.toString()} ${emailConfirmTitle}`,
-      templatePath: path.join(
-        this.configService.getOrThrow('app.workingDirectory', {
-          infer: true,
-        }),
-        'src',
-        'mail',
-        'mail-templates',
-        'confirm-new-email.hbs',
-      ),
-      context: {
-        title: emailConfirmTitle,
-        url: url.toString(),
-        actionTitle: emailConfirmTitle,
-        app_name: this.configService.get('app.name', { infer: true }),
-        text1,
-        text2,
-        text3,
-      },
-    });
+    await this.transporter.sendMail({
+      from: this.configService.get("FROM_EMAIL", "noreply@example.com"),
+      to: user.email,
+      subject: "Password reset",
+      html: `
+        <h1>Password reset</h1>
+        <p>To reset your password click the link below:</p>
+        <a href="${resetUrl}">Reset password</a>
+        <p>This link will expire in two hours.</p>
+        <p>If you did not request your password to be reset, please ignore this email and your password will stay as it is.</p>
+      `,
+    })
   }
 }

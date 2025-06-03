@@ -6,134 +6,142 @@ import {
   Patch,
   Param,
   Delete,
-  UseGuards,
   Query,
-  HttpStatus,
-  HttpCode,
-  SerializeOptions,
-} from '@nestjs/common';
-import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
-import {
-  ApiBearerAuth,
-  ApiCreatedResponse,
-  ApiOkResponse,
-  ApiParam,
-  ApiTags,
-} from '@nestjs/swagger';
-import { Roles } from '../roles/roles.decorator';
-import { RoleEnum } from '../roles/roles.enum';
-import { AuthGuard } from '@nestjs/passport';
+  UseGuards,
+  Render,
+  Redirect,
+  ParseIntPipe,
+} from "@nestjs/common"
+import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger"
+import type { UsersService } from "./users.service"
+import type { CreateUserDto } from "./dto/create-user.dto"
+import type { UpdateUserDto } from "./dto/update-user.dto"
+import type { PaginationDto } from "../common/dto/pagination.dto"
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard"
+import { AdminGuard } from "../auth/guards/admin.guard"
+import { CurrentUser } from "../auth/decorators/current-user.decorator"
+import type { User } from "./entities/user.entity"
+import type { MicropostsService } from "../microposts/microposts.service"
+import type { RelationshipsService } from "../relationships/relationships.service"
 
-import {
-  InfinityPaginationResponse,
-  InfinityPaginationResponseDto,
-} from '../utils/dto/infinity-pagination-response.dto';
-import { NullableType } from '../utils/types/nullable.type';
-import { QueryUserDto } from './dto/query-user.dto';
-import { User } from './domain/user';
-import { UsersService } from './users.service';
-import { RolesGuard } from '../roles/roles.guard';
-import { infinityPagination } from '../utils/infinity-pagination';
-
-@ApiBearerAuth()
-@Roles(RoleEnum.admin)
-@UseGuards(AuthGuard('jwt'), RolesGuard)
-@ApiTags('Users')
-@Controller({
-  path: 'users',
-  version: '1',
-})
+@ApiTags("users")
+@Controller("users")
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly micropostsService: MicropostsService,
+    private readonly relationshipsService: RelationshipsService,
+  ) {}
 
-  @ApiCreatedResponse({
-    type: User,
-  })
-  @SerializeOptions({
-    groups: ['admin'],
-  })
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  create(@Body() createProfileDto: CreateUserDto): Promise<User> {
-    return this.usersService.create(createProfileDto);
-  }
-
-  @ApiOkResponse({
-    type: InfinityPaginationResponse(User),
-  })
-  @SerializeOptions({
-    groups: ['admin'],
-  })
   @Get()
-  @HttpCode(HttpStatus.OK)
-  async findAll(
-    @Query() query: QueryUserDto,
-  ): Promise<InfinityPaginationResponseDto<User>> {
-    const page = query?.page ?? 1;
-    let limit = query?.limit ?? 10;
-    if (limit > 50) {
-      limit = 50;
+  @Render('users/index')
+  async index(@Query() paginationDto: PaginationDto) {
+    const result = await this.usersService.findAll(paginationDto);
+    return {
+      title: 'All users',
+      ...result,
+    };
+  }
+
+  @Get("new")
+  @Render("users/new")
+  newUser() {
+    return { title: "Sign up" }
+  }
+
+  @Post()
+  @Redirect('/login')
+  async create(@Body() createUserDto: CreateUserDto) {
+    await this.usersService.create(createUserDto);
+    return { url: '/login' };
+  }
+
+  @Get(":id")
+  @Render("users/show")
+  async show(@Param('id', ParseIntPipe) id: number, @Query() paginationDto: PaginationDto) {
+    const user = await this.usersService.findOne(id)
+    const microposts = await this.micropostsService.findByUser(id, paginationDto)
+    const followingCount = await this.relationshipsService.getFollowingCount(id)
+    const followersCount = await this.relationshipsService.getFollowersCount(id)
+
+    return {
+      title: user.name,
+      user,
+      microposts: microposts.microposts,
+      following_count: followingCount,
+      followers_count: followersCount,
+      ...microposts,
     }
-
-    return infinityPagination(
-      await this.usersService.findManyWithPagination({
-        filterOptions: query?.filters,
-        sortOptions: query?.sort,
-        paginationOptions: {
-          page,
-          limit,
-        },
-      }),
-      { page, limit },
-    );
   }
 
-  @ApiOkResponse({
-    type: User,
-  })
-  @SerializeOptions({
-    groups: ['admin'],
-  })
-  @Get(':id')
-  @HttpCode(HttpStatus.OK)
-  @ApiParam({
-    name: 'id',
-    type: String,
-    required: true,
-  })
-  findOne(@Param('id') id: User['id']): Promise<NullableType<User>> {
-    return this.usersService.findById(id);
+  @Get(":id/edit")
+  @UseGuards(JwtAuthGuard)
+  @Render("users/edit")
+  async edit(@Param('id', ParseIntPipe) id: number, @CurrentUser() currentUser: User) {
+    const user = await this.usersService.findOne(id)
+    return {
+      title: "Edit user",
+      user,
+    }
   }
 
-  @ApiOkResponse({
-    type: User,
-  })
-  @SerializeOptions({
-    groups: ['admin'],
-  })
-  @Patch(':id')
-  @HttpCode(HttpStatus.OK)
-  @ApiParam({
-    name: 'id',
-    type: String,
-    required: true,
-  })
-  update(
-    @Param('id') id: User['id'],
-    @Body() updateProfileDto: UpdateUserDto,
-  ): Promise<User | null> {
-    return this.usersService.update(id, updateProfileDto);
+  @Patch(":id")
+  @UseGuards(JwtAuthGuard)
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateUserDto: UpdateUserDto,
+    @CurrentUser() currentUser: User,
+  ) {
+    const user = await this.usersService.update(id, updateUserDto)
+    return { user }
   }
 
   @Delete(':id')
-  @ApiParam({
-    name: 'id',
-    type: String,
-    required: true,
-  })
-  @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id') id: User['id']): Promise<void> {
-    return this.usersService.remove(id);
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async remove(@Param('id', ParseIntPipe) id: number) {
+    await this.usersService.remove(id);
+    return { message: 'User deleted successfully' };
+  }
+
+  @Get(":id/following")
+  @Render("users/show_follow")
+  async following(@Param('id', ParseIntPipe) id: number, @Query() paginationDto: PaginationDto) {
+    const user = await this.usersService.findOne(id)
+    const following = await this.relationshipsService.getFollowing(id, paginationDto)
+
+    return {
+      title: "Following",
+      user,
+      users: following.users,
+      ...following,
+    }
+  }
+
+  @Get(":id/followers")
+  @Render("users/show_follow")
+  async followers(@Param('id', ParseIntPipe) id: number, @Query() paginationDto: PaginationDto) {
+    const user = await this.usersService.findOne(id)
+    const followers = await this.relationshipsService.getFollowers(id, paginationDto)
+
+    return {
+      title: "Followers",
+      user,
+      users: followers.users,
+      ...followers,
+    }
+  }
+
+  // API Routes
+  @Get('api/users')
+  @ApiOperation({ summary: 'Get all users' })
+  @ApiBearerAuth()
+  async findAll(@Query() paginationDto: PaginationDto) {
+    return this.usersService.findAll(paginationDto);
+  }
+
+  @Get('api/users/:id')
+  @ApiOperation({ summary: 'Get user by id' })
+  async findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.findOne(id);
   }
 }

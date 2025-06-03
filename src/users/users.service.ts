@@ -1,288 +1,102 @@
-import {
-  HttpStatus,
-  Injectable,
-  UnprocessableEntityException,
-} from '@nestjs/common';
-import { CreateUserDto } from './dto/create-user.dto';
-import { NullableType } from '../utils/types/nullable.type';
-import { FilterUserDto, SortUserDto } from './dto/query-user.dto';
-import { UserRepository } from './infrastructure/persistence/user.repository';
-import { User } from './domain/user';
-import bcrypt from 'bcryptjs';
-import { AuthProvidersEnum } from '../auth/auth-providers.enum';
-import { FilesService } from '../files/files.service';
-import { RoleEnum } from '../roles/roles.enum';
-import { StatusEnum } from '../statuses/statuses.enum';
-import { IPaginationOptions } from '../utils/types/pagination-options';
-import { FileType } from '../files/domain/file';
-import { Role } from '../roles/domain/role';
-import { Status } from '../statuses/domain/status';
-import { UpdateUserDto } from './dto/update-user.dto';
+import { Injectable, NotFoundException, ConflictException } from "@nestjs/common"
+import type { Repository } from "typeorm"
+import type { User } from "./entities/user.entity"
+import type { CreateUserDto } from "./dto/create-user.dto"
+import type { UpdateUserDto } from "./dto/update-user.dto"
+import type { PaginationDto } from "../common/dto/pagination.dto"
 
 @Injectable()
 export class UsersService {
-  constructor(
-    private readonly usersRepository: UserRepository,
-    private readonly filesService: FilesService,
-  ) {}
+  constructor(private usersRepository: Repository<User>) {}
 
   async create(createUserDto: CreateUserDto): Promise<User> {
-    // Do not remove comment below.
-    // <creating-property />
+    const existingUser = await this.usersRepository.findOne({
+      where: { email: createUserDto.email },
+    })
 
-    let password: string | undefined = undefined;
-
-    if (createUserDto.password) {
-      const salt = await bcrypt.genSalt();
-      password = await bcrypt.hash(createUserDto.password, salt);
+    if (existingUser) {
+      throw new ConflictException("Email already exists")
     }
 
-    let email: string | null = null;
-
-    if (createUserDto.email) {
-      const userObject = await this.usersRepository.findByEmail(
-        createUserDto.email,
-      );
-      if (userObject) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            email: 'emailAlreadyExists',
-          },
-        });
-      }
-      email = createUserDto.email;
-    }
-
-    let photo: FileType | null | undefined = undefined;
-
-    if (createUserDto.photo?.id) {
-      const fileObject = await this.filesService.findById(
-        createUserDto.photo.id,
-      );
-      if (!fileObject) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            photo: 'imageNotExists',
-          },
-        });
-      }
-      photo = fileObject;
-    } else if (createUserDto.photo === null) {
-      photo = null;
-    }
-
-    let role: Role | undefined = undefined;
-
-    if (createUserDto.role?.id) {
-      const roleObject = Object.values(RoleEnum)
-        .map(String)
-        .includes(String(createUserDto.role.id));
-      if (!roleObject) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            role: 'roleNotExists',
-          },
-        });
-      }
-
-      role = {
-        id: createUserDto.role.id,
-      };
-    }
-
-    let status: Status | undefined = undefined;
-
-    if (createUserDto.status?.id) {
-      const statusObject = Object.values(StatusEnum)
-        .map(String)
-        .includes(String(createUserDto.status.id));
-      if (!statusObject) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            status: 'statusNotExists',
-          },
-        });
-      }
-
-      status = {
-        id: createUserDto.status.id,
-      };
-    }
-
-    return this.usersRepository.create({
-      // Do not remove comment below.
-      // <creating-property-payload />
-      firstName: createUserDto.firstName,
-      lastName: createUserDto.lastName,
-      email: email,
-      password: password,
-      photo: photo,
-      role: role,
-      status: status,
-      provider: createUserDto.provider ?? AuthProvidersEnum.email,
-      socialId: createUserDto.socialId,
-    });
+    const user = this.usersRepository.create(createUserDto)
+    return this.usersRepository.save(user)
   }
 
-  findManyWithPagination({
-    filterOptions,
-    sortOptions,
-    paginationOptions,
-  }: {
-    filterOptions?: FilterUserDto | null;
-    sortOptions?: SortUserDto[] | null;
-    paginationOptions: IPaginationOptions;
-  }): Promise<User[]> {
-    return this.usersRepository.findManyWithPagination({
-      filterOptions,
-      sortOptions,
-      paginationOptions,
-    });
+  async findAll(paginationDto: PaginationDto) {
+    const { page = 1, limit = 30 } = paginationDto
+    const skip = (page - 1) * limit
+
+    const [users, total] = await this.usersRepository.findAndCount({
+      skip,
+      take: limit,
+      order: { name: "ASC" },
+      relations: ["microposts"],
+    })
+
+    return {
+      users,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    }
   }
 
-  findById(id: User['id']): Promise<NullableType<User>> {
-    return this.usersRepository.findById(id);
-  }
+  async findOne(id: number): Promise<User> {
+    const user = await this.usersRepository.findOne({
+      where: { id },
+      relations: ["microposts", "active_relationships", "passive_relationships"],
+    })
 
-  findByIds(ids: User['id'][]): Promise<User[]> {
-    return this.usersRepository.findByIds(ids);
-  }
-
-  findByEmail(email: User['email']): Promise<NullableType<User>> {
-    return this.usersRepository.findByEmail(email);
-  }
-
-  findBySocialIdAndProvider({
-    socialId,
-    provider,
-  }: {
-    socialId: User['socialId'];
-    provider: User['provider'];
-  }): Promise<NullableType<User>> {
-    return this.usersRepository.findBySocialIdAndProvider({
-      socialId,
-      provider,
-    });
-  }
-
-  async update(
-    id: User['id'],
-    updateUserDto: UpdateUserDto,
-  ): Promise<User | null> {
-    // Do not remove comment below.
-    // <updating-property />
-
-    let password: string | undefined = undefined;
-
-    if (updateUserDto.password) {
-      const userObject = await this.usersRepository.findById(id);
-
-      if (userObject && userObject?.password !== updateUserDto.password) {
-        const salt = await bcrypt.genSalt();
-        password = await bcrypt.hash(updateUserDto.password, salt);
-      }
+    if (!user) {
+      throw new NotFoundException("User not found")
     }
 
-    let email: string | null | undefined = undefined;
-
-    if (updateUserDto.email) {
-      const userObject = await this.usersRepository.findByEmail(
-        updateUserDto.email,
-      );
-
-      if (userObject && userObject.id !== id) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            email: 'emailAlreadyExists',
-          },
-        });
-      }
-
-      email = updateUserDto.email;
-    } else if (updateUserDto.email === null) {
-      email = null;
-    }
-
-    let photo: FileType | null | undefined = undefined;
-
-    if (updateUserDto.photo?.id) {
-      const fileObject = await this.filesService.findById(
-        updateUserDto.photo.id,
-      );
-      if (!fileObject) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            photo: 'imageNotExists',
-          },
-        });
-      }
-      photo = fileObject;
-    } else if (updateUserDto.photo === null) {
-      photo = null;
-    }
-
-    let role: Role | undefined = undefined;
-
-    if (updateUserDto.role?.id) {
-      const roleObject = Object.values(RoleEnum)
-        .map(String)
-        .includes(String(updateUserDto.role.id));
-      if (!roleObject) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            role: 'roleNotExists',
-          },
-        });
-      }
-
-      role = {
-        id: updateUserDto.role.id,
-      };
-    }
-
-    let status: Status | undefined = undefined;
-
-    if (updateUserDto.status?.id) {
-      const statusObject = Object.values(StatusEnum)
-        .map(String)
-        .includes(String(updateUserDto.status.id));
-      if (!statusObject) {
-        throw new UnprocessableEntityException({
-          status: HttpStatus.UNPROCESSABLE_ENTITY,
-          errors: {
-            status: 'statusNotExists',
-          },
-        });
-      }
-
-      status = {
-        id: updateUserDto.status.id,
-      };
-    }
-
-    return this.usersRepository.update(id, {
-      // Do not remove comment below.
-      // <updating-property-payload />
-      firstName: updateUserDto.firstName,
-      lastName: updateUserDto.lastName,
-      email,
-      password,
-      photo,
-      role,
-      status,
-      provider: updateUserDto.provider,
-      socialId: updateUserDto.socialId,
-    });
+    return user
   }
 
-  async remove(id: User['id']): Promise<void> {
-    await this.usersRepository.remove(id);
+  async findByEmail(email: string): Promise<User> {
+    return this.usersRepository.findOne({ where: { email } })
+  }
+
+  async update(id: number, updateUserDto: UpdateUserDto): Promise<User> {
+    const user = await this.findOne(id)
+    Object.assign(user, updateUserDto)
+    return this.usersRepository.save(user)
+  }
+
+  async remove(id: number): Promise<void> {
+    const user = await this.findOne(id)
+    await this.usersRepository.remove(user)
+  }
+
+  async activate(id: number): Promise<User> {
+    const user = await this.findOne(id)
+    user.activated = true
+    user.activated_at = new Date()
+    user.activation_digest = null
+    return this.usersRepository.save(user)
+  }
+
+  async setResetDigest(email: string, digest: string): Promise<User> {
+    const user = await this.findByEmail(email)
+    if (!user) {
+      throw new NotFoundException("User not found")
+    }
+
+    user.reset_digest = digest
+    user.reset_sent_at = new Date()
+    return this.usersRepository.save(user)
+  }
+
+  async resetPassword(email: string, password: string): Promise<User> {
+    const user = await this.findByEmail(email)
+    if (!user) {
+      throw new NotFoundException("User not found")
+    }
+
+    user.password = password
+    user.reset_digest = null
+    user.reset_sent_at = null
+    return this.usersRepository.save(user)
   }
 }
